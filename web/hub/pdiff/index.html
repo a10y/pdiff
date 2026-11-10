@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pdiff</title>
+<link rel="stylesheet" href="style.css">
+<!-- The server puts the saved settings here (see src/server.rs). -->
+<!--PDIFF_PREFS-->
+<script>
+  // Send page errors and console output to the pdiff log (~/.cache/pdiff/pdiff.log).
+  (function () {
+    function send(kind, args) {
+      try {
+        var msg = Array.prototype.map.call(args, function (a) {
+          return a && a.stack ? a.stack : typeof a === 'object' ? JSON.stringify(a) : String(a);
+        }).join(' ');
+        fetch('api/log?' + new URLSearchParams({ kind: kind, msg: msg.slice(0, 4000) }));
+      } catch (e) {}
+    }
+    window.addEventListener('error', function (e) { send('error', [e.message + ' @ ' + e.filename + ':' + e.lineno, e.error]); });
+    window.addEventListener('unhandledrejection', function (e) { send('rejection', [e.reason]); });
+    ['error', 'warn', 'log'].forEach(function (k) {
+      var orig = console[k];
+      console[k] = function () { send(k, arguments); return orig.apply(console, arguments); };
+    });
+  })();
+</script>
+</head>
+<body class="diffshub">
+<div id="root"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

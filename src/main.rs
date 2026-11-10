@@ -293,17 +293,44 @@ impl App {
         wv.set_page_zoom((wv.page_zoom() * factor).clamp(0.25, 5.0));
     }
 
+    /// Press and release `key`. Servo keeps the modifier state of the last
+    /// key event and gives it to later mouse events, so the modifiers are
+    /// pressed before the key and released after it, as on a real keyboard.
+    /// Otherwise, after Ctrl+Enter, every click would be a Ctrl-click.
     fn send_key(&self, key: Key, mods: Modifiers) {
+        self.send_modifiers(mods, KeyState::Down);
         for state in [KeyState::Down, KeyState::Up] {
-            self.webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::new_without_event(
-                state,
-                key.clone(),
-                Code::Unidentified,
-                Location::Standard,
-                mods,
-                false,
-                false,
-            )));
+            self.send_raw_key(state, key.clone(), Code::Unidentified, Location::Standard, mods);
+        }
+        self.send_modifiers(mods, KeyState::Up);
+    }
+
+    fn send_raw_key(&self, state: KeyState, key: Key, code: Code, location: Location, mods: Modifiers) {
+        self.webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::new_without_event(
+            state, key, code, location, mods, false, false,
+        )));
+    }
+
+    /// Key events for the modifier keys in `mods`. Down events add one
+    /// modifier at a time; up events remove one at a time, ending with none.
+    fn send_modifiers(&self, mods: Modifiers, state: KeyState) {
+        const KEYS: [(Modifiers, servo::NamedKey, Code); 4] = [
+            (Modifiers::SHIFT, servo::NamedKey::Shift, Code::ShiftLeft),
+            (Modifiers::CONTROL, servo::NamedKey::Control, Code::ControlLeft),
+            (Modifiers::ALT, servo::NamedKey::Alt, Code::AltLeft),
+            (Modifiers::META, servo::NamedKey::Meta, Code::MetaLeft),
+        ];
+        let mut held = if state == KeyState::Down { Modifiers::empty() } else { mods };
+        for (m, key, code) in KEYS {
+            if !mods.contains(m) {
+                continue;
+            }
+            if state == KeyState::Down {
+                held |= m;
+            } else {
+                held -= m;
+            }
+            self.send_raw_key(state, Key::Named(key), code, Location::Left, held);
         }
     }
 
@@ -357,24 +384,12 @@ impl App {
         }
         // Shift-click: hold Shift around the click so the page sees `event.shiftKey`.
         if shift && press {
-            self.send_modifier(KeyState::Down);
+            self.send_modifiers(Modifiers::SHIFT, KeyState::Down);
         }
         wv.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(action, mouse_button, point.into())));
         if shift && !press {
-            self.send_modifier(KeyState::Up);
+            self.send_modifiers(Modifiers::SHIFT, KeyState::Up);
         }
-    }
-
-    fn send_modifier(&self, state: KeyState) {
-        self.webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::new_without_event(
-            state,
-            Key::Named(servo::NamedKey::Shift),
-            Code::ShiftLeft,
-            Location::Left,
-            if state == KeyState::Down { Modifiers::SHIFT } else { Modifiers::empty() },
-            false,
-            false,
-        )));
     }
 
     // -- output -------------------------------------------------------------

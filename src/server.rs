@@ -77,6 +77,7 @@ fn content_type(path: &str) -> &'static str {
         "json" => "application/json",
         "wasm" => "application/wasm",
         "svg" => "image/svg+xml",
+        "woff2" => "font/woff2",
         _ => "application/octet-stream",
     }
 }
@@ -144,6 +145,8 @@ fn handle(mut req: Request, repo: &Repo, initial: &Source, prefix: &str, control
         }
         "api/prefs" => json(load_prefs().to_string()),
         "api/prefs/set" => {
+            // Requests run on several threads: read, change, and write under one lock.
+            let _guard = PREFS_LOCK.lock().unwrap();
             let mut prefs = load_prefs();
             for (k, v) in &q {
                 // Values arrive as JSON text; store them as JSON values.
@@ -172,6 +175,41 @@ fn handle(mut req: Request, repo: &Repo, initial: &Source, prefix: &str, control
             control.quit.store(true, Ordering::Relaxed);
             Response::from_string("")
         }
+        // Routes for the DiffsHub UI (web/hub): the raw patch, a label, and
+        // full files by side, so the page does not need to know revisions.
+        "api/patch" => {
+            let src = source_from(&q, initial);
+            match repo.revs(&src).and_then(|(old, new, _)| repo.patch(&src, &old, &new)) {
+                Ok(p) => Response::from_string(p)
+                    .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+                    .with_header(header("Cache-Control", "no-store")),
+                Err(e) => Response::from_string(e)
+                    .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+                    .with_status_code(500),
+            }
+        }
+        "api/source-info" => {
+            let r = repo.revs(&source_from(&q, initial));
+            let body = match r {
+                Ok((old, new, label)) => serde_json::json!({ "label": label, "oldRev": old, "newRev": new }),
+                Err(e) => serde_json::json!({ "label": "", "error": e }),
+            };
+            json(body.to_string())
+        }
+        "api/source-file" => {
+            let src = source_from(&q, initial);
+            let file = param(&q, "path").unwrap_or_default();
+            let bytes = repo.revs(&src).ok().and_then(|(old, new, _)| {
+                let rev = if param(&q, "side").as_deref() == Some("old") { old } else { new };
+                repo.file(&rev, &file)
+            });
+            match bytes {
+                Some(b) => Response::from_data(b)
+                    .with_header(header("Content-Type", "text/plain; charset=utf-8"))
+                    .with_header(header("Cache-Control", "no-store")),
+                None => Response::from_string("not found").with_status_code(404),
+            }
+        }
         "api/fingerprint" => Response::from_string(repo.fingerprint(&source_from(&q, initial)))
             .with_header(header("Cache-Control", "no-store")),
         "api/file" => {
@@ -186,7 +224,20 @@ fn handle(mut req: Request, repo: &Repo, initial: &Source, prefix: &str, control
         }
         _ => {
             let file = if path.is_empty() { "index.html" } else { path };
-            match WEB.get_file(file) {
+            // The DiffsHub-based UI (web/dist/hub) is the default.
+            // PDIFF_UI=classic serves the first UI (web/dist).
+            let classic = std::env::var("PDIFF_UI").is_ok_and(|v| v == "classic");
+            let found = if classic { WEB.get_file(file) } else { WEB.get_file(format!("hub/{file}")) };
+            match found {
+                // The hub page reads its settings before any script runs.
+                Some(f) if !classic && file == "index.html" => {
+                    let html = String::from_utf8_lossy(f.contents());
+                    let prefs = load_prefs().to_string().replace('<', "\\u003c");
+                    let script = format!("<script>window.PDIFF_PREFS = {prefs};</script>");
+                    Response::from_string(html.replace("<!--PDIFF_PREFS-->", &script))
+                        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+                        .with_header(header("Cache-Control", "no-store"))
+                }
                 Some(f) => Response::from_data(f.contents().to_vec())
                     .with_header(header("Content-Type", content_type(file)))
                     .with_header(header("Cache-Control", "max-age=3600")),
@@ -214,10 +265,17 @@ fn load_prefs() -> serde_json::Value {
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
+static PREFS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Writes a temporary file and renames it, so a reader never sees a partly
+/// written file.
 fn save_prefs(prefs: &serde_json::Value) {
     let path = prefs_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, serde_json::to_string_pretty(prefs).unwrap_or_default());
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, serde_json::to_string_pretty(prefs).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
 }

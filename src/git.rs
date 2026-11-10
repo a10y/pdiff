@@ -271,43 +271,51 @@ impl Repo {
         }
     }
 
-    fn diff_inner(&self, src: &Source) -> Result<Diff, String> {
-        const BASE: &[&str] = &["diff", "--no-color", "--no-ext-diff", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
-        let diff = |extra: &[&str]| -> Result<String, String> {
-            let mut args = BASE.to_vec();
-            args.extend_from_slice(extra);
-            self.run(&args)
-        };
+    /// The old and new revisions for `src` and a label for it, without running
+    /// the diff. Revisions are commits, ":" (the index) or "WORKTREE".
+    pub fn revs(&self, src: &Source) -> Result<(String, String, String), String> {
         // Without commits, compare against the empty tree.
         let head = if self.has_head() { "HEAD".to_string() } else { self.empty_tree() };
-        let (patch, old_rev, new_rev, label) = match src.mode.as_str() {
-            "unstaged" => {
-                let mut p = diff(&[])?;
-                p.push_str(&self.untracked_patch());
-                (p, INDEX.to_string(), WORKTREE.to_string(), "Unstaged changes".to_string())
-            }
-            "staged" => (diff(&["--cached", &head])?, head.clone(), INDEX.to_string(), "Staged changes".to_string()),
-            "uncommitted" => {
-                let mut p = diff(&[&head])?;
-                p.push_str(&self.untracked_patch());
-                (p, head.clone(), WORKTREE.to_string(), "All uncommitted changes".to_string())
-            }
+        Ok(match src.mode.as_str() {
+            "unstaged" => (INDEX.to_string(), WORKTREE.to_string(), "Unstaged changes".to_string()),
+            "staged" => (head, INDEX.to_string(), "Staged changes".to_string()),
+            "uncommitted" => (head, WORKTREE.to_string(), "All uncommitted changes".to_string()),
             "base" => {
                 let base = src.base.clone().or_else(|| self.default_base()).ok_or("no base branch found")?;
                 let mb = self
                     .line(&["merge-base", &base, "HEAD"])
                     .ok_or_else(|| format!("{base} and HEAD have no common ancestor"))?;
-                let label = format!("{} vs {base}", self.branch());
-                (diff(&[&mb, "HEAD"])?, mb, self.resolve("HEAD")?, label)
+                (mb, self.resolve("HEAD")?, format!("{} vs {base}", self.branch()))
             }
             "range" => {
                 let range = src.range.clone().unwrap_or_default();
                 let (old, new) = self.parse_range(&range)?;
-                (diff(&[&old, &new])?, old, new, range)
+                (old, new, range)
             }
             other => return Err(format!("unknown mode: {other}")),
-        };
+        })
+    }
+
+    fn diff_inner(&self, src: &Source) -> Result<Diff, String> {
+        let (old_rev, new_rev, label) = self.revs(src)?;
+        let patch = self.patch(src, &old_rev, &new_rev)?;
         Ok(Diff { patch, old_rev, new_rev, label, error: None })
+    }
+
+    /// The unified diff text from `old_rev` to `new_rev` (as returned by `revs`).
+    pub fn patch(&self, src: &Source, old_rev: &str, new_rev: &str) -> Result<String, String> {
+        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
+        match (old_rev, new_rev) {
+            (INDEX, WORKTREE) => {}
+            (old, INDEX) => args.extend(["--cached", old]),
+            (old, WORKTREE) => args.push(old),
+            (old, new) => args.extend([old, new]),
+        }
+        let mut patch = self.run(&args)?;
+        if new_rev == WORKTREE && matches!(src.mode.as_str(), "unstaged" | "uncommitted") {
+            patch.push_str(&self.untracked_patch());
+        }
+        Ok(patch)
     }
 
     /// "A..B", "A...B" (from the merge base), or a single commit "A" (A^..A).

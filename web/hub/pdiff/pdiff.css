@@ -1,0 +1,9 @@
+/* pdiff overrides on top of DiffsHub's globals.css. */
+@import '../styles/globals.css';
+
+/* Next.js font loaders set these in DiffsHub. pdiff uses system fonts:
+   Berkeley Mono is a commercial font and is not bundled. */
+:root {
+  --font-geist-sans: -apple-system, 'SF Pro Text', 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  --font-berkeley-mono: 'SF Mono', 'JetBrains Mono', 'JetBrains Mono Box Drawing', Menlo, Monaco, monospace;
+}
