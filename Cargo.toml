@@ -1,0 +1,23 @@
+[package]
+name = "pdiff"
+version = "0.1.0"
+edition = "2024"
+description = "A rich git diff viewer that runs inside your terminal (Servo + Kitty graphics)"
+
+[[bin]]
+name = "pdiff"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.23.1"
+dpi = "0.1"
+euclid = "0.22.14"
+include_dir = "0.7"
+libc = "0.2.191"
+rustls = "0.23.46"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+servo = { version = "0.8.0", features = ["webgl", "webgpu"] }
+signal-hook = "0.4.6"
+tiny_http = "0.12"
+url = "2"

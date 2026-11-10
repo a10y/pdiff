@@ -1,0 +1,14 @@
+{
+  "name": "pdiff-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts --outdir dist --target browser --minify --format esm && cp src/index.html src/style.css dist/"
+  },
+  "dependencies": {
+    "@pierre/diffs": "^1.6.4"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pdiff</title>
+<link rel="stylesheet" href="style.css">
+<script>
+  // Send page errors and console warnings to the pdiff log (~/.cache/pdiff/pdiff.log).
+  (function () {
+    function send(kind, args) {
+      try {
+        var msg = Array.prototype.map.call(args, function (a) {
+          return a && a.stack ? a.stack : typeof a === 'object' ? JSON.stringify(a) : String(a);
+        }).join(' ');
+        fetch('api/log?' + new URLSearchParams({ kind: kind, msg: msg.slice(0, 4000) }));
+      } catch (e) {}
+    }
+    window.addEventListener('error', function (e) { send('error', [e.message + ' @ ' + e.filename + ':' + e.lineno, e.error]); });
+    window.addEventListener('unhandledrejection', function (e) { send('rejection', [e.reason]); });
+    ['error', 'warn', 'log'].forEach(function (k) {
+      var orig = console[k];
+      console[k] = function () { send(k, arguments); return orig.apply(console, arguments); };
+    });
+  })();
+</script>
+</head>
+<body>
+<header id="bar">
+  <div class="repo">
+    <span id="repo-name" class="repo-name"></span>
+    <span class="sep">/</span>
+    <span id="branch" class="branch"></span>
+  </div>
+
+  <div class="source">
+    <button id="source-btn" class="btn source-btn" title="Choose what to compare (c)">
+      <span class="source-kicker">Comparing</span>
+      <span id="source-label" class="source-label">…</span>
+      <svg class="chev" viewBox="0 0 16 16" width="12" height="12"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+
+  <div id="stats" class="stats"></div>
+
+  <div class="spacer"></div>
+
+  <div class="seg" role="group" aria-label="Diff layout">
+    <button id="style-split" class="seg-btn" title="Split view (s)">Split</button>
+    <button id="style-unified" class="seg-btn" title="Unified view (s)">Unified</button>
+  </div>
+  <button id="wrap-btn" class="btn icon-btn" title="Wrap long lines (w)">
+    <svg viewBox="0 0 16 16" width="15" height="15"><path d="M2 4h12M2 8h9.5a2.5 2.5 0 0 1 0 5H8m0 0l1.6-1.6M8 13l1.6 1.6M2 12h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button id="theme-btn" class="btn icon-btn" title="Light / dark theme (t)">
+    <svg viewBox="0 0 16 16" width="15" height="15"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg>
+  </button>
+  <button id="refresh-btn" class="btn icon-btn" title="Reload the diff (r)">
+    <svg viewBox="0 0 16 16" width="15" height="15"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5V5h-2.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+</header>
+
+<div id="picker" class="picker hidden">
+  <div class="picker-col">
+    <div class="picker-title">Working tree</div>
+    <div id="mode-list" class="mode-list"></div>
+    <div class="picker-title">Compare branch against</div>
+    <div class="filter-wrap"><input id="base-filter" class="filter" placeholder="Filter branches…" spellcheck="false"></div>
+    <div id="base-list" class="ref-list"></div>
+  </div>
+  <div class="picker-col wide">
+    <div class="picker-title">
+      Commits
+      <span class="picker-hint">click: one commit · shift-click: range</span>
+    </div>
+    <div id="commit-list" class="commit-list"></div>
+    <div class="picker-title">Any revision range</div>
+    <div class="custom-row">
+      <input id="custom-range" class="filter mono" placeholder="main~3..HEAD   or   v1.2.0...my-branch" spellcheck="false">
+      <button id="custom-go" class="btn primary">Show</button>
+    </div>
+  </div>
+</div>
+
+<main id="main">
+  <aside id="sidebar">
+    <div class="filter-wrap"><input id="file-filter" class="filter" placeholder="Filter files…  (/)" spellcheck="false"></div>
+    <div id="tree" class="tree"></div>
+  </aside>
+  <section id="viewer">
+    <div id="empty" class="empty hidden"></div>
+    <div id="codeview"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
