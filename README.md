@@ -46,6 +46,8 @@ tree and index reload when files change.
 | `x` / `X` | Collapse this file / all files |
 | `e` | Show / hide the file tree |
 | `/` | Filter files |
+| `m` | Comment on the selected lines (or click the `+` in the gutter; drag it for a range) |
+| `y` | Copy all comments as a Markdown prompt for an agent |
 | `g` `G`, `d` `u`, space | Top / bottom, half page, page |
 | `r` | Reload |
 | `q`, Ctrl-Q, Ctrl-C | Quit |
@@ -61,6 +63,8 @@ pdiff ──┬─ HTTP server on 127.0.0.1 (random port + token)
         │    /api/info    branch, refs, commits, change counts
         │    /api/diff    unified patch for a source (git diff ...)
         │    /api/file    file text at a rev, for "expand context"
+        │    /api/comments      review comments (GET, or POST from the page)
+        │    /api/comments.md   the comments as a Markdown prompt
         └─ Servo WebView ──frames──▶ Kitty graphics (t=s) ──▶ terminal
                          ◀──mouse/keys── terminal input
 ```

@@ -10,6 +10,7 @@
 
 mod git;
 mod input;
+mod review;
 mod server;
 mod term;
 

@@ -2,7 +2,9 @@ import {
   CodeView,
   parsePatchFiles,
   type CodeViewDiffItem,
+  type DiffLineAnnotation,
   type FileDiffMetadata,
+  type SelectedLineRange,
   type FileDiffLoadedFiles,
 } from '@pierre/diffs';
 
@@ -43,6 +45,24 @@ interface DiffResponse {
   newRev: string;
   label: string;
   error?: string;
+}
+
+type Side = 'additions' | 'deletions';
+
+/** A review comment on one or more lines. Matches `Comment` in src/review.rs. */
+interface ReviewComment {
+  id: string;
+  file: string;
+  side: Side;
+  start: number;
+  end: number;
+  body: string;
+  snippet: string[];
+}
+
+/** A comment being written or edited. `editing` is the id of the comment it replaces. */
+interface Draft extends ReviewComment {
+  editing?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +148,8 @@ const state = {
   active: null as string | null,
   fingerprint: '',
   rangeAnchor: null as number | null,
+  comments: [] as ReviewComment[],
+  draft: null as Draft | null,
 };
 
 // ---------------------------------------------------------------------------
@@ -164,6 +186,9 @@ function viewerOptions() {
     expansionLineCount: 20,
     loadDiffFiles,
     enableLineSelection: true,
+    enableGutterUtility: true,
+    onGutterUtilityClick: (range: SelectedLineRange, ctx: { item: { id: string } }) => startComment(ctx.item.id, range),
+    renderAnnotation: (a: { metadata: ReviewComment }) => renderComment(a.metadata),
     lineHoverHighlight: 'both' as const,
     layout: { paddingTop: 10, paddingBottom: 40, gap: 10 },
     unsafeCSS: SERVO_CSS,
@@ -185,8 +210,15 @@ const SERVO_CSS = `
 const viewer = new CodeView(viewerOptions());
 viewer.setup($('codeview'));
 
-function itemFor(fd: FileDiffMetadata, version = 0): CodeViewDiffItem {
-  return { id: fd.name, type: 'diff', fileDiff: fd, collapsed: state.collapsed.has(fd.name), version };
+function itemFor(fd: FileDiffMetadata, version = 0): CodeViewDiffItem<ReviewComment> {
+  return {
+    id: fd.name,
+    type: 'diff',
+    fileDiff: fd,
+    collapsed: state.collapsed.has(fd.name),
+    version,
+    annotations: annotationsFor(fd.name),
+  };
 }
 
 let embedderTheme = '';
@@ -537,6 +569,203 @@ function toggleCollapseAll() {
 }
 
 // ---------------------------------------------------------------------------
+// Review comments
+// ---------------------------------------------------------------------------
+
+/**
+ * Comments show below their last line. The renderer compares annotation
+ * metadata by identity, so a changed comment must be a new object.
+ */
+function annotationsFor(file: string): DiffLineAnnotation<ReviewComment>[] {
+  const d = state.draft;
+  const list = state.comments.filter((c) => c.file === file && c.id !== d?.editing);
+  if (d && d.file === file) list.push(d);
+  return list.map((c) => ({ side: c.side, lineNumber: c.end, metadata: c }));
+}
+
+/** Re-render one file so its annotations update. */
+function refreshFile(file: string) {
+  const fd = state.files.find((f) => f.name === file);
+  if (fd) viewer.updateItem(itemFor(fd, ++itemVersion));
+}
+
+let commentSeq = 0;
+
+/** Text of lines `start..end` on one side, when the diff includes them. */
+function snippetFor(fd: FileDiffMetadata, side: Side, start: number, end: number): string[] {
+  const lines = side === 'additions' ? fd.additionLines : fd.deletionLines;
+  const out: string[] = [];
+  for (let n = start; n <= end; n++) {
+    let i = n - 1;
+    if (fd.isPartial) {
+      const hunk = fd.hunks.find((h) =>
+        side === 'additions'
+          ? n >= h.additionStart && n < h.additionStart + h.additionCount
+          : n >= h.deletionStart && n < h.deletionStart + h.deletionCount,
+      );
+      if (!hunk) return [];
+      i = side === 'additions' ? hunk.additionLineIndex + n - hunk.additionStart : hunk.deletionLineIndex + n - hunk.deletionStart;
+    }
+    const line = lines[i];
+    if (line == null) return [];
+    out.push(line.replace(/\r?\n$/, ''));
+  }
+  return out;
+}
+
+/** Open a comment box for a line range of `file`. */
+function startComment(file: string, range: SelectedLineRange) {
+  const fd = state.files.find((f) => f.name === file);
+  if (!fd) return;
+  const side: Side = range.endSide ?? range.side ?? 'additions';
+  // A range across both sides (split view) has two line number spaces; keep the last line only.
+  const sameSide = (range.side ?? side) === side;
+  const start = sameSide ? Math.min(range.start, range.end) : range.end;
+  const end = sameSide ? Math.max(range.start, range.end) : range.end;
+  const prev = state.draft;
+  state.draft = { id: `c${Date.now().toString(36)}${commentSeq++}`, file, side, start, end, body: '', snippet: snippetFor(fd, side, start, end) };
+  if (prev && prev.file !== file) refreshFile(prev.file);
+  viewer.clearSelectedLines();
+  refreshFile(file);
+}
+
+function editComment(c: ReviewComment) {
+  const prev = state.draft;
+  state.draft = { ...c, editing: c.id };
+  if (prev && prev.file !== c.file) refreshFile(prev.file);
+  refreshFile(c.file);
+}
+
+function cancelDraft() {
+  const d = state.draft;
+  if (!d) return;
+  state.draft = null;
+  refreshFile(d.file);
+}
+
+function submitDraft() {
+  const d = state.draft;
+  if (!d) return;
+  state.draft = null;
+  const { editing, ...c } = d;
+  if (!c.body.trim()) {
+    // An empty comment deletes the comment it edits.
+    state.comments = state.comments.filter((x) => x.id !== editing);
+  } else if (editing) {
+    state.comments = state.comments.map((x) => (x.id === editing ? c : x));
+  } else {
+    state.comments.push(c);
+  }
+  refreshFile(d.file);
+  commentsChanged();
+}
+
+function deleteComment(c: ReviewComment) {
+  state.comments = state.comments.filter((x) => x.id !== c.id);
+  refreshFile(c.file);
+  commentsChanged();
+}
+
+/** Comment on the selected lines (key m). */
+function commentOnSelection() {
+  const sel = viewer.getSelectedLines();
+  if (!sel) return toast('Select lines first: click or drag line numbers, or use the + button');
+  startComment(sel.id, sel.range);
+}
+
+function lineLabel(c: ReviewComment) {
+  const lines = c.start === c.end ? `Line ${c.start}` : `Lines ${c.start}–${c.end}`;
+  return c.side === 'deletions' ? `${lines} (old)` : lines;
+}
+
+function renderComment(c: ReviewComment): HTMLElement {
+  if (c === state.draft) return renderDraft(state.draft);
+  const body = h('div', { class: 'comment-body' }, c.body);
+  return h(
+    'div',
+    { class: 'comment', ondblclick: () => editComment(c) },
+    h(
+      'div',
+      { class: 'comment-head' },
+      h('span', { class: 'comment-lines' }, lineLabel(c)),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'link-btn', onclick: () => editComment(c) }, 'Edit'),
+      h('button', { class: 'link-btn danger', onclick: () => deleteComment(c) }, 'Delete'),
+    ),
+    body,
+  );
+}
+
+function renderDraft(d: Draft): HTMLElement {
+  const ta = h('textarea', {
+    class: 'comment-input',
+    placeholder: 'Leave a comment for the agent…',
+    rows: 3,
+    spellcheck: 'false',
+  }) as HTMLTextAreaElement;
+  ta.value = d.body;
+  ta.addEventListener('input', () => {
+    d.body = ta.value;
+  });
+  ta.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') cancelDraft();
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      submitDraft();
+    }
+  });
+  requestAnimationFrame(() => {
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  });
+  return h(
+    'div',
+    { class: 'comment draft' },
+    h('div', { class: 'comment-head' }, h('span', { class: 'comment-lines' }, lineLabel(d))),
+    ta,
+    h(
+      'div',
+      { class: 'comment-actions' },
+      h('span', { class: 'hint' }, 'Ctrl-Enter to save · Esc to cancel'),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn', onclick: cancelDraft }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: submitDraft }, d.editing ? 'Save' : 'Comment'),
+    ),
+  );
+}
+
+/** Send the list to the server (for agents) and update the header button. */
+function commentsChanged() {
+  const n = state.comments.length;
+  const btn = $('comments-btn');
+  btn.classList.toggle('hidden', n === 0);
+  $('comments-count').textContent = String(n);
+  fetch('api/comments', {
+    method: 'POST',
+    body: JSON.stringify({ label: $('source-label').textContent ?? '', comments: state.comments }),
+  });
+}
+
+async function loadComments() {
+  try {
+    const r = await getJSON<{ comments: ReviewComment[] }>('api/comments');
+    state.comments = r.comments ?? [];
+  } catch {
+    state.comments = [];
+  }
+  commentsChanged();
+}
+
+/** Copy all comments as a Markdown prompt (key y). */
+async function copyComments() {
+  if (!state.comments.length) return toast('No comments yet');
+  const r = await fetch('api/comments/copy');
+  const n = state.comments.length;
+  toast(r.ok ? `Copied ${n} comment${n === 1 ? '' : 's'}. Paste them into your agent.` : `Copy failed: ${await r.text()}`);
+}
+
+// ---------------------------------------------------------------------------
 // Source picker
 // ---------------------------------------------------------------------------
 
@@ -680,6 +909,7 @@ function wire() {
   $('wrap-btn').addEventListener('click', toggleWrap);
   $('theme-btn').addEventListener('click', toggleTheme);
   $('refresh-btn').addEventListener('click', refresh);
+  $('comments-btn').addEventListener('click', copyComments);
   $('file-filter').addEventListener('input', renderTree);
   $('base-filter').addEventListener('input', renderBaseList);
   const custom = $('custom-range') as HTMLInputElement;
@@ -723,6 +953,8 @@ function wire() {
       X: toggleCollapseAll,
       e: () => save('sidebar', !document.body.classList.toggle('no-sidebar')),
       '/': () => $('file-filter').focus(),
+      m: commentOnSelection,
+      y: copyComments,
       '1': () => setSource({ mode: 'uncommitted' }),
       '2': () => setSource({ mode: 'unstaged' }),
       '3': () => setSource({ mode: 'staged' }),
@@ -775,6 +1007,7 @@ async function main() {
   state.theme = store('theme', 'dark');
   if (!store<boolean>('sidebar', true)) document.body.classList.add('no-sidebar');
   applyOptions();
+  await loadComments();
   try {
     await refreshInfo();
   } catch (err) {

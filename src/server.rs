@@ -10,6 +10,7 @@ use include_dir::{Dir, include_dir};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::git::{Repo, Source};
+use crate::review::{self, Review};
 
 static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
@@ -26,6 +27,8 @@ pub struct Control {
     /// "dark" or "light": the page's theme, for prefers-color-scheme.
     pub theme: Mutex<Option<String>>,
     pub quit: AtomicBool,
+    /// Review comments from the page (see review.rs).
+    pub review: Mutex<Review>,
 }
 
 pub fn start(repo: Repo, initial: Source) -> std::io::Result<Handle> {
@@ -94,7 +97,7 @@ fn source_from(q: &[(String, String)], initial: &Source) -> Source {
     }
 }
 
-fn handle(req: Request, repo: &Repo, initial: &Source, prefix: &str, control: &Control) {
+fn handle(mut req: Request, repo: &Repo, initial: &Source, prefix: &str, control: &Control) {
     let url = req.url().to_string();
     if std::env::var_os("PDIFF_DEBUG").is_some() {
         eprintln!("http {}", url.split_once('/').map(|x| x.1).unwrap_or(&url).chars().take(160).collect::<String>());
@@ -103,11 +106,27 @@ fn handle(req: Request, repo: &Repo, initial: &Source, prefix: &str, control: &C
         let _ = req.respond(Response::from_string("not found").with_status_code(404));
         return;
     };
+    let path = rest.split('?').next().unwrap_or("");
+    // The page sends the comment list as a JSON body.
+    if *req.method() == Method::Post && path == "api/comments" {
+        let mut body = String::new();
+        let resp = match std::io::Read::read_to_string(req.as_reader(), &mut body)
+            .map_err(|e| e.to_string())
+            .and_then(|_| serde_json::from_str::<Review>(&body).map_err(|e| e.to_string()))
+        {
+            Ok(r) => {
+                *control.review.lock().unwrap() = r;
+                Response::from_string("")
+            }
+            Err(e) => Response::from_string(e).with_status_code(400),
+        };
+        let _ = req.respond(resp);
+        return;
+    }
     if *req.method() != Method::Get {
         let _ = req.respond(Response::from_string("method not allowed").with_status_code(405));
         return;
     }
-    let path = rest.split('?').next().unwrap_or("");
     let q = query(rest);
 
     let json = |body: String| {
@@ -136,6 +155,18 @@ fn handle(req: Request, repo: &Repo, initial: &Source, prefix: &str, control: &C
         "api/theme" => {
             *control.theme.lock().unwrap() = param(&q, "t");
             Response::from_string("")
+        }
+        "api/comments" => json(serde_json::to_string(&*control.review.lock().unwrap()).unwrap()),
+        "api/comments.md" => Response::from_string(control.review.lock().unwrap().to_markdown())
+            .with_header(header("Content-Type", "text/markdown; charset=utf-8"))
+            .with_header(header("Cache-Control", "no-store")),
+        "api/comments/copy" => {
+            let md = control.review.lock().unwrap().to_markdown();
+            if review::copy_to_clipboard(&md) {
+                Response::from_string("")
+            } else {
+                Response::from_string("no clipboard tool found").with_status_code(500)
+            }
         }
         "api/quit" => {
             control.quit.store(true, Ordering::Relaxed);

@@ -305,3 +305,52 @@ body.no-sidebar #sidebar { display: none; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
+
+/* Review comments ------------------------------------------------------- */
+
+.comments-btn { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.comments-btn #comments-count { font-weight: 700; font-family: var(--mono); }
+
+.comment {
+  margin: 6px 12px 8px;
+  max-width: 760px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 7px;
+  background: var(--bg-2);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 13px;
+  white-space: normal;
+}
+.comment-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.comment-lines { color: var(--fg-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.comment-body { white-space: pre-wrap; line-height: 1.45; overflow-wrap: anywhere; }
+.comment-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 var(--font);
+  resize: vertical;
+  outline: none;
+}
+.comment-input:focus { border-color: var(--accent); }
+.comment-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.comment-actions .hint { color: var(--fg-3); font-size: 11px; }
+.link-btn {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--fg-3);
+  font: 12px var(--font);
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--accent); }
+.link-btn.danger:hover { color: var(--del); }
