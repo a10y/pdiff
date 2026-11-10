@@ -7,3 +7,14 @@
   --font-geist-sans: -apple-system, 'SF Pro Text', 'Inter', 'Helvetica Neue', Arial, sans-serif;
   --font-berkeley-mono: 'SF Mono', 'JetBrains Mono', 'JetBrains Mono Box Drawing', Menlo, Monaco, monospace;
 }
+
+/* Servo does not restyle the code view's shadow host (<diffs-container>)
+   when its theme CSS changes, so after a theme switch the diff kept the old
+   colour scheme. A rule from the page wins over the shadow :host rules, and
+   Servo applies changes to it. ThemeProvider sets the class on <html>. */
+html.dark diffs-container {
+  color-scheme: dark;
+}
+html.light diffs-container {
+  color-scheme: light;
+}

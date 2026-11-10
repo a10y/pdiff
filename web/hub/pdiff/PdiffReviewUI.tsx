@@ -211,17 +211,6 @@ function Inner({ initialInfo }: PdiffReviewUIProps) {
     });
   }, [loadState, viewerKey]);
 
-  // Servo does not restyle the code view's shadow host when its theme CSS
-  // changes, so the old colours stay. A new viewer gets the right ones: reload
-  // (it keeps the scroll position and puts the comments back).
-  const themeKey = `${themeState.resolvedColorScheme}:${lightThemeName}:${darkThemeName}`;
-  const lastThemeKeyRef = useRef(themeKey);
-  useEffect(() => {
-    if (lastThemeKeyRef.current === themeKey) return;
-    lastThemeKeyRef.current = themeKey;
-    reload();
-  }, [themeKey, reload]);
-
   // Watch the repo and reload when the diff may have changed.
   useEffect(() => {
     let live = true;

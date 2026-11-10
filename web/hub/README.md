@@ -18,6 +18,8 @@ Build with `../build-hub.sh` (output: `../dist/hub/`). Check types with
 - Inline SVG draws only literal `fill`/`stroke` attributes (no CSS, no
   `currentColor`): `pdiff/svgColorFix.ts`.
 - The code view's shadow host does not restyle when its theme CSS changes:
-  the viewer reloads on a theme change (`PdiffReviewUI.tsx`).
+  a page rule sets its `color-scheme` from the `<html>` class (`pdiff.css`).
+- An `<svg>` is drawn again only when the root element changes:
+  `svgColorFix.ts` bumps `data-pdiff-v` on each root it changed.
 - A diffs worker start sometimes hangs: there is no worker pool
   (`components/WorkerPoolProvider.tsx`).

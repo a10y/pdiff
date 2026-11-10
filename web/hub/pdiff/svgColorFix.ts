@@ -11,6 +11,19 @@
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const watched = new Set<Document | ShadowRoot>();
 const dirty = new Set<ParentNode>();
+// Root <svg> elements changed in this pass. Servo draws an <svg> again only
+// when the root itself changes, not when a child changes, so each one gets a
+// new `data-pdiff-v` at the end of the pass.
+const changedRoots = new Set<Element>();
+let version = 0;
+
+function rootSvg(el: Element): Element | null {
+  let root: Element | null = null;
+  for (let e: Element | null = el; e != null; e = e.parentElement) {
+    if (e.localName === 'svg') root = e;
+  }
+  return root;
+}
 let scheduled = false;
 
 // Elements to fix: users of currentColor (or ones this module changed), sprite
@@ -21,7 +34,11 @@ const TARGETS =
 const SHADOW_HOSTS = 'diffs-container, file-tree-container';
 
 function setColorAttr(el: Element, attr: 'fill' | 'stroke', color: string): void {
-  if (color && el.getAttribute(attr) !== color) el.setAttribute(attr, color);
+  if (color && el.getAttribute(attr) !== color) {
+    el.setAttribute(attr, color);
+    const root = rootSvg(el);
+    if (root != null) changedRoots.add(root);
+  }
 }
 
 /** Replace fill/stroke="currentcolor" with the computed colour. */
@@ -75,6 +92,8 @@ function inlineUse(use: Element): void {
   use.after(copy);
   // The copied paths may use currentColor too.
   for (const el of copy.querySelectorAll('[fill], [stroke]')) fixCurrentColor(el);
+  const svg = rootSvg(use);
+  if (svg != null) changedRoots.add(svg);
 }
 
 function fixElement(el: Element): void {
@@ -105,6 +124,9 @@ function flush(): void {
   for (const r of roots) {
     if ((r as Node).isConnected !== false) scan(r);
   }
+  version++;
+  for (const root of changedRoots) root.setAttribute('data-pdiff-v', String(version));
+  changedRoots.clear();
 }
 
 function markDirty(root: ParentNode): void {
