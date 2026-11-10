@@ -14,6 +14,8 @@ pub enum Ev {
     PixelMouse(bool),
     TextAreaPx { w: u32, h: u32 },
     CellPx { w: u32, h: u32 },
+    /// Kitty graphics reply for image `id`: `None` is "OK", else the error text.
+    ImageReply { id: u32, error: Option<String> },
 }
 
 #[derive(Default)]
@@ -150,6 +152,32 @@ impl Parser {
                         let params = String::from_utf8_lossy(&buf[i + 2..end]).into_owned();
                         self.csi(&params, buf[end], out);
                         i = end + 1;
+                    }
+                    b'_' => {
+                        // APC: ESC _ ... ST, where ST is ESC \ or BEL.
+                        let body = i + 2;
+                        let Some(rel) = buf[body..].iter().position(|&c| c == 0x07 || c == 0x1b)
+                        else {
+                            if flushing {
+                                i = buf.len();
+                            }
+                            break;
+                        };
+                        let end = body + rel;
+                        let st_len = if buf[end] == 0x07 {
+                            1
+                        } else if end + 1 < buf.len() {
+                            2
+                        } else {
+                            if flushing {
+                                i = buf.len();
+                            }
+                            break;
+                        };
+                        if let Some(e) = kitty_reply(&buf[body..end]) {
+                            out.push(e);
+                        }
+                        i = end + st_len;
                     }
                     b'O' => {
                         if i + 2 >= buf.len() {
@@ -305,6 +333,15 @@ impl Parser {
     }
 }
 
+/// Kitty graphics reply body: `G<key=value,...>;<message>`. The message is "OK" on success.
+fn kitty_reply(body: &[u8]) -> Option<Ev> {
+    let body = std::str::from_utf8(body.strip_prefix(b"G")?).ok()?;
+    let (keys, msg) = body.split_once(';')?;
+    let id = keys.split(',').find_map(|kv| kv.strip_prefix("i="))?.parse().ok()?;
+    let error = (msg != "OK").then(|| msg.to_owned());
+    Some(Ev::ImageReply { id, error })
+}
+
 fn ss3_key(fin: u8) -> Option<NamedKey> {
     Some(match fin {
         b'A' => NamedKey::ArrowUp,
@@ -319,4 +356,41 @@ fn ss3_key(fin: u8) -> Option<NamedKey> {
         b'S' => NamedKey::F4,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn replies(chunks: &[&[u8]]) -> Vec<(u32, Option<String>)> {
+        let mut p = Parser::default();
+        let mut out = Vec::new();
+        for c in chunks {
+            p.feed(c, &mut out);
+        }
+        out.into_iter()
+            .map(|e| match e {
+                Ev::ImageReply { id, error } => (id, error),
+                e => panic!("unexpected event {e:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn kitty_ok_reply() {
+        assert_eq!(replies(&[b"\x1b_Gi=7,p=1;OK\x1b\\"]), vec![(7, None)]);
+    }
+
+    #[test]
+    fn kitty_error_reply_with_bel() {
+        assert_eq!(
+            replies(&[b"\x1b_Gi=3;ENOENT:no such file\x07"]),
+            vec![(3, Some("ENOENT:no such file".into()))]
+        );
+    }
+
+    #[test]
+    fn kitty_reply_split_across_reads() {
+        assert_eq!(replies(&[b"\x1b_Gi=42;O", b"K\x1b", b"\\"]), vec![(42, None)]);
+    }
 }

@@ -205,34 +205,64 @@ fn shm_unlink(name: &str) {
     unsafe { libc::shm_unlink(cname.as_ptr()) };
 }
 
-/// If the terminal does not unlink a frame in this time, we unlink it and go on.
+/// If the terminal does not reply to a frame in this time, we stop waiting and go on.
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// A frame sent to the terminal that it has not replied to yet.
+struct InFlight {
+    name: String,
+    id: u32,
+    sent: Instant,
+}
 
 #[derive(Default)]
 pub struct Kitty {
     frame_no: u64,
-    /// Two image ids in turn, so the old frame stays until the new one is placed.
+    /// Image id of the frame on screen. Each frame gets a new id, so a late
+    /// reply cannot match the wrong frame. The old image is deleted after the
+    /// new one is placed.
     current_id: Option<u32>,
-    /// The last frame sent, until the terminal unlinks it (its "ack").
-    in_flight: Option<(String, Instant)>,
+    in_flight: Option<InFlight>,
+    /// Set when the terminal reads frames but does not reply. Then we check
+    /// whether it unlinked the shared memory object instead.
+    no_replies: bool,
 }
 
 impl Kitty {
     /// Backpressure: true when the terminal has read the last frame, so a new
-    /// frame can go. The terminal unlinks each shared memory object after it
-    /// reads it; while the object exists, the terminal is behind.
+    /// frame can go. The terminal's reply (see `on_reply`) clears the frame;
+    /// this only checks the clock, with no syscalls, until the timeout.
     pub fn ready(&mut self) -> bool {
-        let Some((name, sent)) = &self.in_flight else { return true };
-        if shm_exists(name) {
-            if sent.elapsed() < FRAME_ACK_TIMEOUT {
-                return false;
-            }
+        let Some(f) = &self.in_flight else { return true };
+        let timed_out = f.sent.elapsed() >= FRAME_ACK_TIMEOUT;
+        if !timed_out && !self.no_replies {
+            return false;
+        }
+        // The terminal unlinks each shared memory object after it reads it.
+        let unread = shm_exists(&f.name);
+        if unread && !timed_out {
+            return false;
+        }
+        if unread {
             // The terminal could not read it (or never will). Do not leak it.
-            eprintln!("kitty: frame {name} not read after {FRAME_ACK_TIMEOUT:?}; unlinking");
-            shm_unlink(name);
+            eprintln!("kitty: frame {} not read after {FRAME_ACK_TIMEOUT:?}; unlinking", f.name);
+            shm_unlink(&f.name);
+        } else if !self.no_replies {
+            eprintln!("kitty: terminal reads frames but does not reply; checking shared memory instead");
+            self.no_replies = true;
         }
         self.in_flight = None;
         true
+    }
+
+    /// The terminal replied to image `id` (it has read the frame, or failed).
+    pub fn on_reply(&mut self, id: u32, error: Option<String>) {
+        let Some(f) = self.in_flight.take_if(|f| f.id == id) else { return };
+        if let Some(e) = error {
+            eprintln!("kitty: frame {} failed: {e}", f.name);
+            // The terminal may not have read (and unlinked) it.
+            shm_unlink(&f.name);
+        }
     }
 
     /// Place the frame at the top left, scaled to cover the page area.
@@ -241,14 +271,16 @@ impl Kitty {
         let name = format!("/pdiff{}-{}", std::process::id(), self.frame_no);
         let bytes = img.as_raw();
         write_shm(&name, bytes)?;
-        self.in_flight = Some((name.clone(), Instant::now()));
 
-        let id = if self.current_id == Some(1) { 2 } else { 1 };
+        // Ids are u32 and 0 is not a valid id.
+        let id = (self.frame_no as u32).max(1);
+        self.in_flight = Some(InFlight { name: name.clone(), id, sent: Instant::now() });
         let b64 = base64::engine::general_purpose::STANDARD.encode(&name);
         let mut out = io::stdout().lock();
+        // q=0: the terminal replies "OK" (or an error) after it reads the frame.
         write!(
             out,
-            "\x1b[1;1H\x1b_Ga=T,t=s,f=32,s={},v={},S={},i={id},p=1,c={},r={},C=1,q=2;{b64}\x1b\\",
+            "\x1b[1;1H\x1b_Ga=T,t=s,f=32,s={},v={},S={},i={id},p=1,c={},r={},C=1,q=0;{b64}\x1b\\",
             img.width(),
             img.height(),
             bytes.len(),
@@ -272,8 +304,8 @@ impl Kitty {
 
     /// Remove a frame the terminal has not read (call on exit).
     pub fn discard_in_flight(&mut self) {
-        if let Some((name, _)) = self.in_flight.take() {
-            shm_unlink(&name);
+        if let Some(f) = self.in_flight.take() {
+            shm_unlink(&f.name);
         }
     }
 }

@@ -266,6 +266,7 @@ impl App {
                 self.apply_geometry(g);
             }
             Ev::TextAreaPx { .. } | Ev::CellPx { .. } => {}
+            Ev::ImageReply { id, error } => self.kitty.on_reply(id, error),
         }
     }
 
