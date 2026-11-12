@@ -1,8 +1,10 @@
 # Releases every commit on main as the next 0.N.0 version:
-#   1. picks N as one more than the highest v0.N.0 tag (v0.1.0 if none),
+#   1. picks N as one more than the highest 0.N.0 among git tags and
+#      crates.io (0.1.0 if neither has one),
 #   2. builds a macOS arm64 binary with that version,
 #   3. publishes GitHub release v0.N.0 with the binary (for `cargo binstall`),
-#   4. publishes pdiff 0.N.0 to crates.io.
+#   4. publishes pdiff 0.N.0 to crates.io through trusted publishing
+#      (https://crates.io/docs/trusted-publishing): no stored API token.
 # The version lives only in the tag and the published crate; Cargo.toml on
 # main keeps a 0.0.0 placeholder, so CI never has to push commits back.
 name: release
@@ -13,7 +15,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write # create tags and releases
+  id-token: write # OIDC token for crates.io trusted publishing
 
 # Runs queue rather than overlap, so two runs cannot pick the same version.
 concurrency:
@@ -23,6 +26,10 @@ concurrency:
 jobs:
   release:
     runs-on: macos-15
+    # Must match the environment set in the crate's trusted publishing config
+    # on crates.io. GitHub creates it on first use; add protection rules (for
+    # example, deployments from main only) under Settings > Environments.
+    environment: release
     timeout-minutes: 180
     env:
       TARGET: aarch64-apple-darwin
@@ -39,9 +46,16 @@ jobs:
 
       - name: Pick version
         run: |
-          n=$(git ls-remote --tags origin 'refs/tags/v0.*.0' \
-            | sed -nE 's|.*refs/tags/v0\.([0-9]+)\.0$|\1|p' \
-            | sort -n | tail -1)
+          # Check crates.io too, so a version published outside CI (like the
+          # first one) is never reused.
+          n=$( {
+            git ls-remote --tags origin 'refs/tags/v0.*.0' \
+              | sed -nE 's|.*refs/tags/v0\.([0-9]+)\.0$|\1|p'
+            curl -sSf -A 'pdiff-release (https://github.com/a10y/pdiff)' \
+              https://crates.io/api/v1/crates/pdiff/versions \
+              | jq -r '.versions[].num' | sed -nE 's/^0\.([0-9]+)\.0$/\1/p' \
+              || true
+          } | sort -n | tail -1)
           version="0.$(( ${n:-0} + 1 )).0"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           # Stamp the version into the manifest and lockfile (not committed).
@@ -72,14 +86,15 @@ jobs:
             --latest
 
       # After the GitHub release, so `cargo binstall pdiff` finds the binary
-      # as soon as the version is on crates.io. --no-verify skips rebuilding
-      # Servo from the packaged sources; the Build step just compiled them.
+      # as soon as the version is on crates.io. The token from trusted
+      # publishing lasts 30 minutes, so get it here, after the long build.
+      - name: Authenticate with crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      # --no-verify skips rebuilding Servo from the packaged sources; the
+      # Build step just compiled them.
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-            echo "::warning::CARGO_REGISTRY_TOKEN is not set; skipping crates.io publish of $VERSION"
-            exit 0
-          fi
-          cargo publish --locked --no-verify --allow-dirty
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: cargo publish --locked --no-verify --allow-dirty
