@@ -1,6 +1,7 @@
 # Publishes a prebuilt binary for every commit on main, for `cargo binstall`.
-# Each run creates a release tagged main-<short sha> and marks it latest;
-# Cargo.toml's [package.metadata.binstall] points at releases/latest.
+# Each run creates a release tagged YYYY.MM.DD.n (UTC date, nth release of the
+# day) and marks it latest; Cargo.toml's [package.metadata.binstall] points
+# at releases/latest.
 name: release
 
 on:
@@ -47,7 +48,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="main-${GITHUB_SHA::7}"
+          # Tag is YYYY.MM.DD.n (UTC), n counting from 1 within the day. The
+          # concurrency group serializes runs, so two cannot pick the same n.
+          day=$(date -u +%Y.%m.%d)
+          n=$(git ls-remote --tags origin "refs/tags/$day.*" \
+            | sed -E 's|.*refs/tags/[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.([0-9]+)$|\1|' \
+            | sort -n | tail -1)
+          tag="$day.$(( ${n:-0} + 1 ))"
           gh release create "$tag" \
             "pdiff-$TARGET.tar.gz" "pdiff-$TARGET.tar.gz.sha256" \
             --target "$GITHUB_SHA" \
