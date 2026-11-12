@@ -34,7 +34,7 @@ jobs:
     env:
       TARGET: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: oven-sh/setup-bun@v2
 
@@ -61,7 +61,7 @@ jobs:
           # Stamp the version into the manifest and lockfile (not committed).
           sed -i '' -E "s/^version = \"0\.0\.0\"$/version = \"$version\"/" Cargo.toml
           grep -q "^version = \"$version\"$" Cargo.toml
-          cargo update --workspace --offline
+          cargo update --workspace
           echo "Releasing $version"
 
       - name: Build
