@@ -1,0 +1,56 @@
+# Publishes a prebuilt binary for every commit on main, for `cargo binstall`.
+# Each run creates a release tagged main-<short sha> and marks it latest;
+# Cargo.toml's [package.metadata.binstall] points at releases/latest.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Runs queue rather than overlap, so "latest" ends up on the newest commit.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      TARGET: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Package
+        run: |
+          bin="target/$TARGET/release/pdiff"
+          otool -L "$bin"
+          tar -czf "pdiff-$TARGET.tar.gz" -C "$(dirname "$bin")" pdiff
+          shasum -a 256 "pdiff-$TARGET.tar.gz" > "pdiff-$TARGET.tar.gz.sha256"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="main-${GITHUB_SHA::7}"
+          gh release create "$tag" \
+            "pdiff-$TARGET.tar.gz" "pdiff-$TARGET.tar.gz.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "pdiff $tag" \
+            --notes "Built from $GITHUB_SHA on main." \
+            --latest

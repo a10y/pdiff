@@ -3,6 +3,7 @@ name = "pdiff"
 version = "0.1.0"
 edition = "2024"
 description = "A rich git diff viewer that runs inside your terminal (Servo + Kitty graphics)"
+repository = "https://github.com/a10y/pdiff"
 
 [[bin]]
 name = "pdiff"
@@ -21,3 +22,11 @@ servo = { version = "0.8.0", features = ["webgl", "webgpu"] }
 signal-hook = "0.4.6"
 tiny_http = "0.12"
 url = "2"
+
+# Prebuilt binaries come from .github/workflows/release.yml, which publishes a
+# release for every commit on main. The version in Cargo.toml is not bumped
+# per commit, so this always points at the latest release.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/latest/download/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
