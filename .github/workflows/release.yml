@@ -1,7 +1,10 @@
-# Publishes a prebuilt binary for every commit on main, for `cargo binstall`.
-# Each run creates a release tagged YYYY.MM.DD.n (UTC date, nth release of the
-# day) and marks it latest; Cargo.toml's [package.metadata.binstall] points
-# at releases/latest.
+# Releases every commit on main as the next 0.N.0 version:
+#   1. picks N as one more than the highest v0.N.0 tag (v0.1.0 if none),
+#   2. builds a macOS arm64 binary with that version,
+#   3. publishes GitHub release v0.N.0 with the binary (for `cargo binstall`),
+#   4. publishes pdiff 0.N.0 to crates.io.
+# The version lives only in the tag and the published crate; Cargo.toml on
+# main keeps a 0.0.0 placeholder, so CI never has to push commits back.
 name: release
 
 on:
@@ -12,13 +15,13 @@ on:
 permissions:
   contents: write
 
-# Runs queue rather than overlap, so "latest" ends up on the newest commit.
+# Runs queue rather than overlap, so two runs cannot pick the same version.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  macos-arm64:
+  release:
     runs-on: macos-15
     timeout-minutes: 180
     env:
@@ -34,6 +37,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Pick version
+        run: |
+          n=$(git ls-remote --tags origin 'refs/tags/v0.*.0' \
+            | sed -nE 's|.*refs/tags/v0\.([0-9]+)\.0$|\1|p' \
+            | sort -n | tail -1)
+          version="0.$(( ${n:-0} + 1 )).0"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          # Stamp the version into the manifest and lockfile (not committed).
+          sed -i '' -E "s/^version = \"0\.0\.0\"$/version = \"$version\"/" Cargo.toml
+          grep -q "^version = \"$version\"$" Cargo.toml
+          cargo update --workspace --offline
+          echo "Releasing $version"
+
       - name: Build
         run: cargo build --release --locked --target "$TARGET"
 
@@ -44,20 +60,26 @@ jobs:
           tar -czf "pdiff-$TARGET.tar.gz" -C "$(dirname "$bin")" pdiff
           shasum -a 256 "pdiff-$TARGET.tar.gz" > "pdiff-$TARGET.tar.gz.sha256"
 
-      - name: Publish release
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Tag is YYYY.MM.DD.n (UTC), n counting from 1 within the day. The
-          # concurrency group serializes runs, so two cannot pick the same n.
-          day=$(date -u +%Y.%m.%d)
-          n=$(git ls-remote --tags origin "refs/tags/$day.*" \
-            | sed -E 's|.*refs/tags/[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.([0-9]+)$|\1|' \
-            | sort -n | tail -1)
-          tag="$day.$(( ${n:-0} + 1 ))"
-          gh release create "$tag" \
+          gh release create "v$VERSION" \
             "pdiff-$TARGET.tar.gz" "pdiff-$TARGET.tar.gz.sha256" \
             --target "$GITHUB_SHA" \
-            --title "pdiff $tag" \
+            --title "pdiff $VERSION" \
             --notes "Built from $GITHUB_SHA on main." \
             --latest
+
+      # After the GitHub release, so `cargo binstall pdiff` finds the binary
+      # as soon as the version is on crates.io. --no-verify skips rebuilding
+      # Servo from the packaged sources; the Build step just compiled them.
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN is not set; skipping crates.io publish of $VERSION"
+            exit 0
+          fi
+          cargo publish --locked --no-verify --allow-dirty
