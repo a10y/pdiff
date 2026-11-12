@@ -12,7 +12,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 use crate::git::{Repo, Source};
 use crate::review::{self, Review};
 
-static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
+static WEB: Dir<'_> = include_dir!("$OUT_DIR/web/dist");
 
 pub struct Handle {
     /// Base URL of the UI, with the token and a trailing slash.

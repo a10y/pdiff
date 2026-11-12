@@ -1,8 +1,16 @@
 [package]
 name = "pdiff"
-version = "0.1.0"
+# Set by .github/workflows/release.yml on every commit to main (0.1.0,
+# 0.2.0, ...); the committed value is a placeholder for local builds.
+version = "0.0.0"
 edition = "2024"
 description = "A rich git diff viewer that runs inside your terminal (Servo + Kitty graphics)"
+repository = "https://github.com/a10y/pdiff"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["git", "diff", "terminal", "kitty", "servo"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["todos/"]
 
 [[bin]]
 name = "pdiff"
@@ -21,3 +29,10 @@ servo = { version = "0.8.0", features = ["webgl", "webgpu"] }
 signal-hook = "0.4.6"
 tiny_http = "0.12"
 url = "2"
+
+# Prebuilt binaries are attached to the GitHub release v{version}, which
+# .github/workflows/release.yml publishes alongside each crates.io version.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
